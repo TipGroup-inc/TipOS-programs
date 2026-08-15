@@ -62,7 +62,7 @@ export fn _start() callconv(.C) noreturn {
 ```bash
 zig build-exe src/calc.zig \
     -target x86_64-freestanding \
-    -fno-red-zone \
+    -mno-red-zone \
     -O ReleaseSmall \
     -femit-bin=build/calc
 ```
