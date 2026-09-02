@@ -32,24 +32,32 @@ Programa Zig **sem nenhuma libc**: o `_start` chama os syscalls direto.
 
 ## Hello World (zig)
 
-```zig
-const std = @import("std"); // só pra tipos/compilador — nada de std.io no runtime
+> Sintaxe do Zig 0.14+ (repo usa 0.16.0): clobbers são `.{ .rcx = true, ... }`
+> e calling convention é `.c`. Guia completo de syscalls: `docs/SYSCALLS.md` no repo
 
-export fn _start() callconv(.C) noreturn {
+```zig
+fn syscall3(num: usize, a1: usize, a2: usize, a3: usize) usize {
+    return asm volatile ("int $0x80"
+        : [ret] "={rax}" (-> usize),
+        : [num] "{rax}" (num),
+          [a1] "{rdi}" (a1),
+          [a2] "{rsi}" (a2),
+          [a3] "{rdx}" (a3),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+}
+
+fn syscall1(num: usize, a1: usize) usize {
+    return asm volatile ("int $0x80"
+        : [ret] "={rax}" (-> usize),
+        : [num] "{rax}" (num),
+          [a1] "{rdi}" (a1),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+}
+
+export fn _start() callconv(.c) noreturn {
     const msg = "Hello, TipOS!\n";
-    const len = msg.len;
-    // syscall write(4): rdi=fd, rsi=buf, rdx=count
-    asm volatile ("int $0x80"
-        : "+a" (@as(usize, 4))
-        : [fd] "D" (@as(usize, 1)),
-          [buf] "S" (@as(usize, @intFromPtr(msg.ptr))),
-          [n] "d" (@as(usize, len))
-        : "rcx", "r11", "memory");
-    // syscall exit(1): rdi=code
-    asm volatile ("int $0x80"
-        : "+a" (@as(usize, 1))
-        : [code] "D" (@as(usize, 0))
-        : "rcx", "r11");
+    _ = syscall3(4, 1, @intFromPtr(msg.ptr), msg.len);  // write(1, msg, len)
+    _ = syscall1(1, 0);                                 // exit(0)
     unreachable;
 }
 ```
@@ -62,13 +70,13 @@ export fn _start() callconv(.C) noreturn {
 ```bash
 zig build-exe src/calc.zig \
     -target x86_64-freestanding \
-    -fno-red-zone \
+    -mno-red-zone \
     -O ReleaseSmall \
     -femit-bin=build/calc
 ```
 
 - `x86_64-freestanding` = sem libc, sem features de host
-- `-fno-red-zone` = regra do kernel (interrupções usam a stack)
+- `-mno-red-zone` = regra do kernel (interrupções usam a stack)
 - Build final pode virar um `build.zig` (issue #1 pede isso)
 
 ## Instalando no disco + rodando
