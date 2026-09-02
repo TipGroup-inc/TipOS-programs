@@ -1,6 +1,6 @@
 // Calculadora científica para TipOS
 // Freestanding ELF64, sem libc, syscalls via int $0x80
-// Build: zig build-exe calc.zig -target x86_64-freestanding -fno-red-zone -O ReleaseSmall -femit-bin=build/calc
+// Build: zig build
 
 // ===========================================================================
 // Constantes
@@ -16,15 +16,19 @@ const LN2: f64 = 0.69314718055994530942;
 // rax=nº, rdi=a1, rsi=a2, rdx=a3, retorno em rax
 // ===========================================================================
 
+const SYS_EXIT: usize = 1;
+const SYS_READ: usize = 3;
+const SYS_WRITE: usize = 4;
+
 fn sys_write(fd: usize, buf: [*]const u8, count: usize) usize {
     var ret: usize = undefined;
     asm volatile ("int $0x80"
         : [ret] "={rax}" (ret),
-        : [num] "{rax}" (@as(usize, 4)),
+        : [num] "{rax}" (SYS_WRITE),
           [fd] "{rdi}" (fd),
           [buf] "{rsi}" (@intFromPtr(buf)),
           [count] "{rdx}" (count),
-        : "rcx", "r11", "memory"
+        : "rcx", "r11", "memory"  // TODO: syscall/sysret migration (TipOS-staging#42)
     );
     return ret;
 }
@@ -33,11 +37,11 @@ fn sys_read(fd: usize, buf: [*]u8, count: usize) usize {
     var ret: usize = undefined;
     asm volatile ("int $0x80"
         : [ret] "={rax}" (ret),
-        : [num] "{rax}" (@as(usize, 3)),
+        : [num] "{rax}" (SYS_READ),
           [fd] "{rdi}" (fd),
           [buf] "{rsi}" (@intFromPtr(buf)),
           [count] "{rdx}" (count),
-        : "rcx", "r11", "memory"
+        : "rcx", "r11", "memory"  // TODO: syscall/sysret migration (TipOS-staging#42)
     );
     return ret;
 }
@@ -45,9 +49,9 @@ fn sys_read(fd: usize, buf: [*]u8, count: usize) usize {
 fn sys_exit(code: usize) noreturn {
     asm volatile ("int $0x80"
         :
-        : [num] "{rax}" (@as(usize, 1)),
+        : [num] "{rax}" (SYS_EXIT),
           [code] "{rdi}" (code),
-        : "rcx", "r11"
+        : "rcx", "r11"  // TODO: syscall/sysret migration (TipOS-staging#42)
     );
     unreachable;
 }
@@ -224,15 +228,11 @@ const Parser = struct {
     }
 
     fn unary(self: *Parser) CalcError!f64 {
-        if (self.current == .minus) {
-            try self.advance();
-            return -(try self.primary());
+        switch (self.current) {
+            .minus => { try self.advance(); return -(try self.unary()); },
+            .plus => { try self.advance(); return try self.unary(); },
+            else => return self.primary(),
         }
-        if (self.current == .plus) {
-            try self.advance();
-            return try self.primary();
-        }
-        return try self.primary();
     }
 
     fn primary(self: *Parser) CalcError!f64 {
@@ -596,15 +596,6 @@ fn writeStr(src: []const u8, buf: []u8) void {
     buf[i] = 0;
 }
 
-fn writeErr(err: anyerror, buf: []u8) void {
-    const name = @errorName(err);
-    var i: usize = 0;
-    while (i < name.len and i < buf.len - 1) : (i += 1) {
-        buf[i] = name[i];
-    }
-    buf[i] = 0;
-}
-
 fn f64ToStr(val: f64, buf: []u8) void {
     if (val != val) { // NaN
         writeStr("NaN", buf);
@@ -698,10 +689,9 @@ fn main() void {
         // Parse e avalia
         var parser = Parser.init(buf[0..len]);
         const result = parser.parse() catch |err| {
-            var err_buf: [64]u8 = undefined;
-            writeErr(err, &err_buf);
             _ = sys_write(1, "Error: ", 7);
-            _ = sys_write(1, &err_buf, strLen(&err_buf));
+            const err_name = @errorName(err);
+            _ = sys_write(1, err_name.ptr, err_name.len);
             _ = sys_write(1, "\n", 1);
             continue;
         };
